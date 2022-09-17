@@ -1388,3 +1388,112 @@ func TestRemoveNonExpiredData(t *testing.T) {
 		noError(t, err)
 	}
 }
+
+//func TestMultiGet(t *testing.T) {
+//	t.Parallel()
+//
+//	// given
+//	cache, _ := NewBigCache(Config{
+//		Shards:             2,
+//		LifeWindow:         5 * time.Second,
+//		MaxEntriesInWindow: 10,
+//		MaxEntrySize:       256,
+//	})
+//	keys := []string{"key_1", "key_2", "key_3", "key_4"}
+//	expected := [][]byte{blob('1', 1024), blob('2', 1024), blob('3', 1024), blob('4', 1024)}
+//	for i, key := range keys {
+//		cache.Set(key, expected[i])
+//	}
+//	// when
+//	actual, err := cache.MGet(keys,)
+//	// then
+//	assertEqual(t, expected, actual)
+//	assertEqual(t, cache.Stats().Hits, int64(4))
+//	noError(t, err)
+//}
+//
+func TestMultiGetKeyNotExist(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		keys     []string
+		expected [][]byte
+	}{
+		{
+			name:     "0 out of 3 are nil",
+			keys:     []string{"1", "2", "3"},
+			expected: [][]byte{[]byte("a"), []byte("b"), []byte("c")},
+		}, {
+			name:     "1 out of 3 are nil",
+			keys:     []string{"1", "2", "not-Key-3"},
+			expected: [][]byte{[]byte("a"), []byte("b"), nil},
+		}, {
+			name:     "2 out of 3 are nil",
+			keys:     []string{"1", "not-key-2", "not-Key-3"},
+			expected: [][]byte{[]byte("a"), nil, nil},
+		}, {
+			name:     "3 out of 3 are nil",
+			keys:     []string{"not-key-1", "not-key-2", "not-Key-3"},
+			expected: [][]byte{nil, nil, nil},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// given
+			cache, _ := NewBigCache(Config{
+				Shards:             4,
+				LifeWindow:         5 * time.Second,
+				MaxEntriesInWindow: 10,
+				MaxEntrySize:       256,
+			})
+			cache.Set("1", []byte("a"))
+			cache.Set("2", []byte("b"))
+			cache.Set("3", []byte("c"))
+			// when
+			actual := make([][]byte, 3)
+			actual, _ = cache.MGet(tc.keys, actual)
+			// then
+			assertEqual(t, tc.expected, actual)
+		})
+	}
+}
+
+//
+//func TestWriteAndMultiGetParallelSameKeysWithStats(t *testing.T) {
+//	t.Parallel()
+//
+//	c := DefaultConfig(0)
+//	c.StatsEnabled = true
+//
+//	cache, _ := NewBigCache(c)
+//	var wg sync.WaitGroup
+//	ntest := 2
+//	n := 2
+//	wg.Add(n)
+//	keys := []string{"key_1", "key_2", "key_3", "key_4"}
+//	values := [][]byte{blob('a', 256), blob('b', 256), blob('c', 256), blob('d', 256)}
+//	for i := 0; i < ntest; i++ {
+//		for j, key := range keys {
+//			assertEqual(t, nil, cache.Set(key, values[j]))
+//		}
+//	}
+//	for j := 0; j < n; j++ {
+//		go func() {
+//			defer wg.Done()
+//			for i := 0; i < ntest; i++ {
+//				v, err := cache.MGet(keys)
+//				noError(t, err)
+//				assertEqual(t, values, v)
+//			}
+//		}()
+//	}
+//
+//	wg.Wait()
+//
+//	assertEqual(t, Stats{Hits: int64(n * ntest * len(keys))}, cache.Stats())
+//	for _, key := range keys {
+//		assertEqual(t, ntest*n, int(cache.KeyMetadata(key).RequestCount))
+//	}
+//}

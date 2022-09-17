@@ -207,3 +207,78 @@ func readFromCacheNonExistentKeys(b *testing.B, shards int) {
 		}
 	})
 }
+
+func BenchmarkMulti___ReadFromCache(b *testing.B) {
+	for _, shards := range []int{8192} {
+		for _, readCount := range []int{40} {
+			b.Run(fmt.Sprintf("%d-shards,%d-count", shards, readCount), func(b *testing.B) {
+				multiReadFromCache(b, shards, true, readCount)
+			})
+		}
+	}
+}
+
+func BenchmarkSequentialReadFromCache(b *testing.B) {
+	//for _, shards := range []int{1, 512, 1024, 8192} {
+	for _, shards := range []int{8192} {
+		for _, readCount := range []int{40} {
+			b.Run(fmt.Sprintf("%d-shards,%d-count", shards, readCount), func(b *testing.B) {
+				multiReadFromCache(b, shards, false, readCount)
+			})
+		}
+	}
+}
+
+func multiReadFromCache(b *testing.B, shards int, isMulti bool, readCount int) {
+	cache, _ := NewBigCache(Config{
+		Shards:             shards,
+		LifeWindow:         1000 * time.Second,
+		MaxEntriesInWindow: max(b.N, 100),
+		MaxEntrySize:       500,
+	})
+	for i := 0; i < b.N; i++ {
+		cache.Set(strconv.Itoa(i), message)
+	}
+	keys := []string{}
+	temp := make([][]byte, readCount)
+	for i := 0; i < readCount; i++ {
+		keys = append(keys, strconv.Itoa(rand.Intn(b.N)))
+	}
+	b.ResetTimer()
+
+	b.RunParallel(func(pb *testing.PB) {
+		b.ReportAllocs()
+		for pb.Next() {
+			if isMulti {
+				cache.MGet(keys, temp)
+			} else {
+				for _, key := range keys {
+					cache.Get(key)
+				}
+			}
+		}
+	})
+}
+
+func multiReadFromCache2(b *testing.B, cache *BigCache, shards int, isMulti bool, readCount int) {
+	keys := []string{}
+	temp := make([][]byte, readCount)
+	for i := 0; i < readCount; i++ {
+		keys = append(keys, strconv.Itoa(rand.Intn(b.N)))
+	}
+	b.ResetTimer()
+
+	b.RunParallel(func(pb *testing.PB) {
+		b.ReportAllocs()
+		for pb.Next() {
+			if isMulti {
+				cache.MGet(keys, temp)
+			} else {
+				for _, key := range keys {
+					cache.Get(key)
+					//temp[i] = get
+				}
+			}
+		}
+	})
+}

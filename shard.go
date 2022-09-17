@@ -15,6 +15,11 @@ type Metadata struct {
 	RequestCount uint32
 }
 
+type Data struct {
+	v []byte
+	i int
+}
+
 type cacheShard struct {
 	hashmap     map[uint64]uint32
 	entries     queue.BytesQueue
@@ -31,6 +36,8 @@ type cacheShard struct {
 	hashmapStats map[uint64]uint32
 	stats        Stats
 	cleanEnabled bool
+
+	pool [][]byte
 }
 
 func (s *cacheShard) getWithInfo(key string, hashedKey uint64) (entry []byte, resp Response, err error) {
@@ -81,6 +88,59 @@ func (s *cacheShard) get(key string, hashedKey uint64) ([]byte, error) {
 	return entry, nil
 }
 
+func (s *cacheShard) mget2(key string, hashedKey uint64) []byte {
+	s.lock.RLock()
+	wrappedEntry, err := s.getWrappedEntry(hashedKey)
+	if err != nil {
+		s.lock.RUnlock()
+		return nil
+	}
+	if entryKey := readKeyFromEntry(wrappedEntry); key != entryKey {
+		s.lock.RUnlock()
+		s.collision()
+		if s.isVerbose {
+			s.logger.Printf("Collision detected. Both %q and %q have the same hash %x", key, entryKey, hashedKey)
+		}
+		return nil
+	}
+	entry := readEntry(wrappedEntry)
+	s.lock.RUnlock()
+	//s.hit(hashedKey)
+	return entry
+}
+
+func (s *cacheShard) mget(keys []KEY, entries [][]byte) {
+	exists := []uint64{}
+	s.lock.RLock()
+	for _, key := range keys {
+		itemIndex := s.hashmap[key.hashedKey]
+		if itemIndex == 0 {
+			s.miss()
+			continue
+		}
+
+		wrappedEntry, err := s.entries.Get(int(itemIndex))
+		if err != nil {
+			s.miss()
+			continue
+		}
+		if wrappedEntry == nil {
+			continue
+		}
+		if key.entry != readKeyFromEntry(wrappedEntry) {
+			s.collision()
+			if s.isVerbose {
+			}
+			continue
+		}
+
+		entries[key.index] = readEntry(wrappedEntry)
+		exists = append(exists, key.hashedKey)
+	}
+	s.lock.RUnlock()
+	s.hits(exists)
+}
+
 func (s *cacheShard) getWrappedEntry(hashedKey uint64) ([]byte, error) {
 	itemIndex := s.hashmap[hashedKey]
 
@@ -96,6 +156,24 @@ func (s *cacheShard) getWrappedEntry(hashedKey uint64) ([]byte, error) {
 	}
 
 	return wrappedEntry, err
+}
+
+func (s *cacheShard) getWrappedEntries(keys []KEY, entries [][]byte) {
+	for _, key := range keys {
+		itemIndex := s.hashmap[key.hashedKey]
+		if itemIndex == 0 {
+			s.miss()
+			continue
+		}
+
+		wrappedEntry, err := s.entries.Get(int(itemIndex))
+		if err != nil {
+			s.miss()
+			continue
+		}
+		entries[key.index] = wrappedEntry
+	}
+
 }
 
 func (s *cacheShard) getValidWrapEntry(key string, hashedKey uint64) ([]byte, error) {
@@ -405,6 +483,17 @@ func (s *cacheShard) hit(key uint64) {
 		s.lock.Lock()
 		s.hashmapStats[key]++
 		s.lock.Unlock()
+	}
+}
+
+func (s *cacheShard) hits(keys []uint64) {
+	if s.statsEnabled {
+		s.lock.Lock()
+		defer s.lock.Unlock()
+		for _, key := range keys {
+			s.hashmapStats[key]++
+			atomic.AddInt64(&s.stats.Hits, 1)
+		}
 	}
 }
 

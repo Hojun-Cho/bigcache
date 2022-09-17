@@ -2,6 +2,7 @@ package bigcache
 
 import (
 	"fmt"
+	"github.com/panjf2000/ants/v2"
 	"time"
 )
 
@@ -20,6 +21,8 @@ type BigCache struct {
 	config     Config
 	shardMask  uint64
 	close      chan struct{}
+
+	pool *ants.Pool
 }
 
 // Response will contain metadata about the entry for which GetWithInfo(key) was called
@@ -63,6 +66,8 @@ func newBigCache(config Config, clock clock) (*BigCache, error) {
 		config.Hasher = newDefaultHasher()
 	}
 
+	pool, _ := ants.NewPool(5000)
+
 	cache := &BigCache{
 		shards:     make([]*cacheShard, config.Shards),
 		lifeWindow: uint64(config.LifeWindow.Seconds()),
@@ -71,6 +76,7 @@ func newBigCache(config Config, clock clock) (*BigCache, error) {
 		config:     config,
 		shardMask:  uint64(config.Shards - 1),
 		close:      make(chan struct{}),
+		pool:       pool,
 	}
 
 	var onRemove func(wrappedEntry []byte, reason RemoveReason)
@@ -121,6 +127,62 @@ func (c *BigCache) Get(key string) ([]byte, error) {
 	hashedKey := c.hash.Sum64(key)
 	shard := c.getShard(hashedKey)
 	return shard.get(key, hashedKey)
+}
+
+type KEY struct {
+	entry     string
+	hashedKey uint64
+	index     int
+}
+
+func (c *BigCache) MGet(keys []string, entries [][]byte) ([][]byte, error) {
+	data := map[uint64][]KEY{}
+	//hKeys := make([]uint64, len(keys))
+	for i, key := range keys {
+		hashedKey := c.hash.Sum64(key)
+		sh := hashedKey & c.shardMask
+		data[sh] = append(data[sh], KEY{
+			entry:     key,
+			hashedKey: hashedKey,
+			index:     i,
+		})
+		//if get, err := c.getShard(hashedKey).get(key, hashedKey); err == nil {
+		//	entries[i] = get
+		//}
+
+		//if entry := c.getShard(hashedKey).mget2(key, hashedKey); entry != nil {
+		//	entries[i] = entry
+		//	hKeys[i] = hashedKey
+		//}
+		//hKeys[i] = hashedKey
+	}
+
+	for k, v := range data {
+		c.shards[k].mget(v, entries)
+	}
+
+	//entries := make([][]byte, l)
+	//for i := range keys {
+	//	hashedKey := c.hash.Sum64(keys[i])
+	//	//sh := hashedKey & c.shardMask
+	//	//entries[i] = c.shards[sh].mget2(keys[i], hashedKey)
+	//	entries[i] = c.getShard(hashedKey).mget2(keys[i], hashedKey)
+	//
+	//	//if entries[i] != nil {
+	//	//	c.shards[sh].hit(hashedKey)
+	//	//	hKeys[sh] = append(hKeys[sh], hashedKey)
+	//	hKeys[i] = hashedKey
+	//	//}
+	//}
+	//
+	////for k, v := range hKeys {
+	////	c.shards[k].hits(v)
+	////}
+	//for _, v := range hKeys {
+	//	c.getShard(v).hit(v)
+	//}
+
+	return entries, nil
 }
 
 // GetWithInfo reads entry for the key with Response info.

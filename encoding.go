@@ -46,7 +46,6 @@ func appendToWrappedEntry(timestamp uint64, wrappedEntry []byte, entry []byte, b
 
 func readEntry(data []byte) []byte {
 	length := binary.LittleEndian.Uint16(data[timestampSizeInBytes+hashSizeInBytes:])
-
 	// copy on read
 	dst := make([]byte, len(data)-int(headersSizeInBytes+length))
 	copy(dst, data[headersSizeInBytes+length:])
